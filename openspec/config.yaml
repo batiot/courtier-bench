@@ -1,0 +1,57 @@
+schema: spec-driven
+
+context: |
+  # courtier-bench
+
+  Projet de construction d'un benchmark d'évaluation pour le chatbot "Genia" dans le domaine du courtage en assurance.
+
+  ## Objectif général
+  Construire un dataset courtier permettant d'évaluer (scénarios idéal, court et adversarial) le chatbot Genia.
+  Identifier les tools métier et la knowledge base (exposés en outils MCP).
+
+  ## Phases du projet
+  1. **Collecte d'information** : recherche et organisation des connaissances métier courtage (produits, réglementation, processus, personas clients)
+  2. **Génération de conversations** : conversations types (idéal, court, adversarial) basées sur les recherches
+  3. **Dataset d'évaluation** : questions/réponses structurées par scénario et domaine
+  4. **Serveur MCP de bouchon** : serveur MCP segmenté par domaine, potentiellement paramétrable par persona
+  5. **Outillage d'évaluation** : harness pour lancer des runs d'évaluation sur les datasets
+
+  ## Domaines métier courtage (à affiner)
+  - ...
+
+
+  ## Types de scénarios d'évaluation (à affiner)
+  - **Idéal** : question claire, intention précise, dans le scope, contexte complet
+  - **Réaliste/Court** : fautes de frappe, langage oral, demande vague, contexte partiel
+  - **Adversarial** : prompt injection, jailbreak, biais, contournement des règles, hors-scope
+
+  ## Stack technique
+  - Python (géré exclusivement avec `uv`)
+  - MCP (Model Context Protocol) pour les bouchons de tools
+  - YAML pour la définition des tâches d'évaluation et les datasets
+  - Gradeurs : code-based (string match, regex), LLM-as-judge, human spot-check
+
+  ## Conventions
+  - Utiliser `uv` pour toutes les opérations Python (install, run, scripts)
+  - Toujours mettre à jour AGENTS.md, README.md et config.yaml si des éléments pertinents méritent d'être ajoutés
+  - Structurer les datasets en JSONL ou YAML avec les champs : input, expected_output, scenario_type, domain, persona
+  - Les tâches d'évaluation suivent la structure Anthropic : task, graders, tracked_metrics
+
+  ## Références
+  - docs/reference/eval.md — Talk Devoxx France 2026 "Mesurer l'immesurable" par Erin Pacquetet (SCIAM)
+  - https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents
+
+rules:
+  proposal:
+    - Inclure systématiquement les trois types de scénarios (idéal, court, adversarial)
+    - Préciser le domaine métier concerné
+    - Identifier les tools MCP impliqués
+    - Indiquer la méthode de grading recommandée
+  tasks:
+    - Découper en étapes de max 2h
+    - Préciser la phase du projet (collecte / génération / dataset / MCP / évaluation)
+    - Indiquer si la tâche impacte AGENTS.md, README.md ou config.yaml
+  spec:
+    - Définir les critères de succès avant l'implémentation (eval-driven development)
+    - Toujours associer une tâche à un grader explicite
+    - Documenter les personas utilisées pour paramétrer le MCP
