@@ -55,6 +55,20 @@ courtier-bench/
 
 ---
 
+## Documentation métier
+
+La knowledge base structurée est disponible dans le dossier `docs/` :
+
+| Document | Description |
+|---|---|
+| [docs/offre-Rikees.md](docs/offre-Rikees.md) | Vue d'ensemble du positionnement Rikees, entités clés et gamme de produits B2B |
+| [docs/relation-b2b-courtierr.md](docs/relation-b2b-courtierr.md) | Interactions SI d'un courtier avec les grossistes, assureurs et solutions B2B |
+| [docs/offer-categorization.md](docs/offer-categorization.md) | Taxonomie des 7 univers produits de l'Espace partenaire Rikees Sol, entités distributrices et rôles B2B |
+| [docs/coverage-scope.md](docs/coverage-scope.md) | Périmètres de couverture par ligne de produit : garanties, profils éligibles, dispositifs réglementaires, exclusions, modularité |
+| [docs/espace-partenaire-interactions.md](docs/espace-partenaire-interactions.md) | Cartographie des interactions fonctionnelles réalisables depuis l'Espace partenaire : tarification, souscription, suivi, pilotage |
+
+---
+
 ## Domaines métier couverts
 
 | Domaine | Tools MCP envisagés |
