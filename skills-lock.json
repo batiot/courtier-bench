@@ -6,6 +6,11 @@
       "sourceType": "github",
       "computedHash": "40771d7d389c1542e6cb995d75e516893466f01c3b66bc040b158ceb793d4bed"
     },
+    "deepeval": {
+      "source": "sammcj/agentic-coding",
+      "sourceType": "github",
+      "computedHash": "5bbadd7e76a3814197608f2a88c7797190aec5b62ddcf9fe8224abf5dd35a284"
+    },
     "documentation-writer": {
       "source": "github/awesome-copilot",
       "sourceType": "github",
