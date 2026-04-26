@@ -9,8 +9,6 @@ All tools return deterministic stub data for benchmark evaluation.
 No real API calls are made.
 """
 
-from __future__ import annotations
-
 from datetime import date, datetime, timedelta
 from enum import Enum
 from typing import Optional

@@ -39,7 +39,7 @@ echo "Source: $MODEL_URL"
 HF_TOKEN="${HF_TOKEN:-${1:-}}"
 if [[ -z "$HF_TOKEN" ]]; then
     echo "ERROR: HuggingFace token required (gated model)."
-    echo "  1. Accept the Gemma license at https://huggingface.co/google/gemma-4-E2B-it"
+    echo "  1. Accept the Gemma license at https://huggingface.co/google/gemma-4-E4B-it"
     echo "  2. Create a Read token at https://huggingface.co/settings/tokens"
     echo "  3. Run:  export HF_TOKEN=hf_xxxxx && bash download.sh"
     exit 1

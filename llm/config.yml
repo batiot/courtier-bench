@@ -1,11 +1,11 @@
 model:
-  name: gemma-4-E2B-it-Q4_K_M
-  # Source: https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF
-  repo: unsloth/gemma-4-E2B-it-GGUF
-  url: https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf
+  name: gemma-4-E4B-it-Q4_K_M
+  # Source: https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF
+  repo: unsloth/gemma-4-E4B-it-GGUF
+  url: https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf
   # SHA256 to verify after download (update once downloaded)
-  sha256: "ac0069ebccd39925d836f24a88c0f0c858d20578c29b21ab7cedce66ee576845"
-  filename: gemma-4-E2B-it-Q4_K_M.gguf
+  sha256: "dff0ffba4c90b4082d70214d53ce9504a28d4d8d998276dcb3b8881a656c742a"
+  filename: gemma-4-E4B-it-Q4_K_M.gguf
 
 server:
   port: 8080
