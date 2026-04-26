@@ -29,12 +29,13 @@ context: |
   - Python (géré exclusivement avec `uv`)
   - MCP (Model Context Protocol) pour les bouchons de tools
   - YAML pour la définition des tâches d'évaluation et les datasets
-  - Gradeurs : code-based (string match, regex), LLM-as-judge, human spot-check
+  - Gradeurs : LLM-as-judge (Gemma-4-E2B via llama.cpp Docker), human spot-check
 
   ## Conventions
   - Utiliser `uv` pour toutes les opérations Python (install, run, scripts)
   - Toujours mettre à jour AGENTS.md, README.md et config.yaml si des éléments pertinents méritent d'être ajoutés
-  - Structurer les datasets en JSONL ou YAML avec les champs : input, expected_output, scenario_type, domain, persona
+  - Structurer les datasets en JSONL avec les champs : id, scenario_family, domain, input, expected, expected_matches
+  - Format des fichiers de runs : JSONL nommé `run_YYYYMMDD_HHMMSS.jsonl` dans `runs/`
   - Les tâches d'évaluation suivent la structure Anthropic : task, graders, tracked_metrics
 
   ## Références

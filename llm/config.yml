@@ -1,0 +1,22 @@
+model:
+  name: gemma-4-E2B-it-Q4_K_M
+  # Source: https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF
+  repo: unsloth/gemma-4-E2B-it-GGUF
+  url: https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf
+  # SHA256 to verify after download (update once downloaded)
+  sha256: "ac0069ebccd39925d836f24a88c0f0c858d20578c29b21ab7cedce66ee576845"
+  filename: gemma-4-E2B-it-Q4_K_M.gguf
+
+server:
+  port: 8080
+  # Adjust to your CPU thread count (nproc)
+  threads: 8
+  # Context size — keep modest for CPU
+  ctx_size: 4096
+
+# Judge inference parameters (official Gemma-4 recommendations)
+inference:
+  temperature: 1.0
+  top_p: 0.95
+  top_k: 64
+  max_tokens: 256

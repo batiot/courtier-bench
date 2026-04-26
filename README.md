@@ -32,24 +32,29 @@ Phase 5 — Évaluation      Harness d'évaluation et runs automatisés
 
 ```
 courtier-bench/
-├── data/
-│   ├── raw/               Collecte brute (PDFs, notes, web)
-│   ├── knowledge/         Knowledge base structurée par domaine
-│   ├── conversations/     Conversations générées (ideal / court / adversarial)
-│   └── datasets/          Datasets d'évaluation finaux (.jsonl)
-├── mcp_server/            Serveur MCP de bouchon (segmenté par domaine)
-│   ├── domains/
-│   └── personas/
-├── eval/                  Harness d'évaluation
-│   ├── graders/
-│   ├── tasks/
-│   └── runner.py
+├── llm/                   Serveur LLM juge local (llama.cpp Docker + Gemma-4-E2B)
+│   ├── docker-compose.yml
+│   ├── config.yml         Paramètres modèle et serveur
+│   ├── download.sh        Téléchargement du modèle GGUF
+│   ├── judge-prompt.md    Prompt système du juge LLM-as-a-judge
+│   └── models/            Modèles GGUF (gitignorés, ~3.5 Go)
+├── runner/                Pipeline d'évaluation (Python/uv)
+│   ├── run.py             Point d'entrée — appelle Genia + juge
+│   ├── metrics/
+│   │   └── llm_judge.py   Métrique LLM-as-a-judge
+│   ├── datasets/          Datasets de scénarios générés par Copilot
+│   │   └── offre/
+│   │       └── ideal.jsonl
+│   └── config.yml.example Configuration à copier
+├── analyzer/              Analyse des résultats (Python/uv)
+│   ├── analyze.py         Rapport par run
+│   ├── compare.py         Comparaison de deux runs
+│   └── reports/           Rapports générés
+├── runs/                  Fichiers de runs JSONL (gitignorés)
 ├── docs/
 │   └── reference/
 │       └── eval.md        Référence méthodologique (Devoxx France 2026)
-├── openspec/
-│   └── config.yaml        Configuration openspec du projet
-├── AGENTS.md              Instructions pour les agents IA
+├── openspec/              Spécifications et changes du projet
 └── README.md
 ```
 
@@ -89,18 +94,45 @@ La knowledge base structurée est disponible dans le dossier `docs/` :
 
 ## Démarrage rapide
 
+### 1. Serveur LLM juge (llm/)
+
+```bash
+# Télécharger le modèle GGUF (~3.5 Go, une seule fois)
+cd llm && bash download.sh
+
+# Démarrer le serveur LLM (port 8080)
+docker compose up
+
+# Vérifier que le serveur répond
+curl http://localhost:8080/health
+```
+
+### 2. Lancer un run d'évaluation (runner/)
+
+```bash
+# Copier et adapter la configuration
+cp runner/config.yml.example runner/config.yml
+
+# Lancer un run sur un dataset
+cd runner && uv run run.py --dataset datasets/offre/ideal.jsonl
+# → Produit runs/run_YYYYMMDD_HHMMSS.jsonl
+```
+
+### 3. Analyser les résultats (analyzer/)
+
+```bash
+# Rapport sur un run
+cd analyzer && uv run analyze.py --run ../runs/run_20260425_143200.jsonl
+
+# Comparer deux runs
+cd analyzer && uv run compare.py --run-a ../runs/run_A.jsonl --run-b ../runs/run_B.jsonl
+```
+
+### Autres commandes
+
 ```bash
 # Installer uv si besoin
 curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Initialiser le projet
-uv sync
-
-# Lancer le serveur MCP de bouchon (à venir)
-uv run python mcp_server/server.py
-
-# Lancer un run d'évaluation (à venir)
-uv run python eval/runner.py --dataset data/datasets/eval_ideal.jsonl
 ```
 
 ---

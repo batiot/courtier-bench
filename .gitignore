@@ -1,0 +1,17 @@
+# LLM models (large files, not committed)
+llm/models/*.gguf
+llm/models/*.bin
+
+# Evaluation run results
+runs/*.jsonl
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.uv/
+
+# Local config overrides
+runner/config.yml
+analyzer/config.yml
+.env

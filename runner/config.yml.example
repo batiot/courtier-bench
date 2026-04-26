@@ -1,0 +1,18 @@
+# Runner configuration example
+# Copy to config.yml and fill in your values (config.yml is gitignored)
+
+# Genia chatbot API
+genia_api_url: "https://api.genia.example.com/v1/chat"
+genia_api_key: ""  # Set via GENIA_API_KEY env var if needed
+
+# LLM judge server (llm/ directory, started with docker compose up)
+judge_api_url: "http://localhost:8080"
+
+# Parallelism — start with 1, increase after spike benchmarking
+workers: 1
+
+# HTTP timeouts in seconds
+timeout_s: 30
+
+# Output directory for run files
+runs_dir: "../runs"
