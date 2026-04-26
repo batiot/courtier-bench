@@ -42,6 +42,15 @@ context: |
   - docs/reference/eval.md — Talk Devoxx France 2026 "Mesurer l'immesurable" par Erin Pacquetet (SCIAM)
   - https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents
 
+  ## Fichiers docs/
+  - docs/courtier-personas.md — 6 personas représentatifs de courtiers français susceptibles d'utiliser l'Espace partenaire Rikees Sol ; référence pour la génération de scénarios d'évaluation
+  - docs/coverage-scope.md — Périmètres de couverture des produits Rikees Sol : garanties, profils éligibles, exclusions et options de modularité
+  - docs/espace-partenaire-interactions.md — Cartographie des univers accessibles et des interactions fonctionnelles réalisables par un courtier depuis l'Espace partenaire Rikees Sol
+  - docs/offer-categorization.md — Taxonomie des offres disponibles dans l'Espace partenaire Rikees Sol (lignes de produits, catégories)
+  - docs/offre-Rikees.md — Vue d'ensemble des offres et solutions B2B de Rikees pour les courtiers (positionnement, entités, écosystème)
+  - docs/relation-b2b-courtierr.md — Interactions clés d'un courtier français avec les SI de grossistes, assureurs et solutions B2B (cotation, souscription, sinistres, CRM, conformité…)
+  - docs/reference/eval.md — Notes du talk Devoxx France 2026 sur l'évaluation des systèmes GenAI, utilisées comme référence méthodologique
+
 rules:
   proposal:
     - Inclure systématiquement les trois types de scénarios (idéal, court, adversarial)
