@@ -67,6 +67,21 @@ class DossierStatus(str, Enum):
 
 # ---------------------------------------------------------------------------
 # ── TARIFICATION TOOLS ──────────────────────────────────────────────────────
+#
+# Chaque univers correspond à un système informatique distinct :
+#   [Emprunteur / jRensure]          check_lemoine_eligibility, compare_offres,
+#                                    compute_tarif_emprunteur
+#   [Santé individuelle / Néoliane]  compute_tarif_sante
+#   [Santé collective / GestiAssur]  compute_tarif_sante_collective
+#   [Prévoyance TNS]                 compute_tarif_prevoyance
+#   [GAV / AccidentVie]              compute_tarif_gav
+#   [Dommages / IARD Pro]            compute_tarif_dommages
+#   [Obsèques / ObsèquesFrance]      compute_tarif_obseques
+#   [Santé internationale / GlobalCare] compute_tarif_sante_internationale
+#   [TNS/Madelin]                    get_madelin_plafonds
+#   [Collectif / CCN]                check_ccn_compliance
+#   [DDA/Docs — par univers]         get_pieces_justificatives_<univers>, export_devis
+#   [API/Tech — par univers]         get_api_tarification_schema_<univers>
 # ---------------------------------------------------------------------------
 
 
@@ -82,10 +97,12 @@ class CheckLemoineInput(BaseModel):
 @mcp.tool(
     name="rikees_check_lemoine_eligibility",
     description=(
-        "Check whether a loan is eligible for Loi Lemoine (2022). "
-        "Lemoine removes the medical questionnaire when: loan is for primary/mixed residential use, "
-        "capital ≤ 200 000 €, and borrower age at end of loan < 60. "
-        "Professional, investment-only and consumer loans are excluded."
+        "[Domaine: Emprunteur] "
+        "Vérifie si un prêt est éligible à la Loi Lemoine (2022), qui supprime le questionnaire médical. "
+        "Conditions Lemoine : usage résidentiel principal ou mixte, capital ≤ 200 000 €, "
+        "âge de l'emprunteur à la fin du prêt < 60 ans. "
+        "Prêts professionnels, locatifs purs et prêts à la consommation sont exclus. "
+        "Utiliser avant toute tarification emprunteur pour orienter vers les bonnes gammes."
     ),
 )
 async def check_lemoine_eligibility(params: CheckLemoineInput) -> str:
@@ -111,71 +128,308 @@ async def check_lemoine_eligibility(params: CheckLemoineInput) -> str:
     )
 
 
-class ComputeTarifInput(BaseModel):
-    universe: Universe = Field(description="Product universe")
-    borrower_age: int = Field(description="Borrower/subscriber age", ge=18, le=90)
-    loan_amount: Optional[int] = Field(None, description="Loan amount in euros (emprunteur only)")
-    loan_duration_years: Optional[int] = Field(None, description="Loan duration in years (emprunteur only)")
-    coverage_formula: Optional[CoverageFormula] = Field(None, description="Coverage formula (emprunteur only)")
+# ---------------------------------------------------------------------------
+# Shared tarification helpers
+# ---------------------------------------------------------------------------
+
+_RISK_FACTORS = {RiskLevel.STANDARD: 1.0, RiskLevel.AGGREVE: 1.35, RiskLevel.TRES_AGGREVE: 1.75}
+
+
+def _age_factor(age: int) -> float:
+    return 1.0 + max(0, (age - 35) * 0.015)
+
+
+def _risk_factor(risk_level: RiskLevel) -> float:
+    return _RISK_FACTORS.get(risk_level, 1.0)
+
+
+# ---------------------------------------------------------------------------
+# TARIFICATION — Emprunteur  (système jRensure)
+# ---------------------------------------------------------------------------
+
+class TarifEmprunteurInput(BaseModel):
+    borrower_age: int = Field(description="Borrower age at subscription", ge=18, le=75)
+    loan_amount: int = Field(description="Loan capital in euros", ge=10_000, le=2_000_000)
+    loan_duration_years: int = Field(description="Loan duration in years", ge=1, le=30)
+    coverage_formula: CoverageFormula = Field(CoverageFormula.DC_PTIA_IPT, description="Coverage formula")
     risk_level: RiskLevel = Field(RiskLevel.STANDARD, description="Medical/profession risk level")
-    beneficiary_count: int = Field(1, description="Number of beneficiaries (health/life)", ge=1, le=10)
 
     model_config = {"use_enum_values": True}
 
 
 @mcp.tool(
-    name="rikees_compute_tarif",
+    name="rikees_compute_tarif_emprunteur",
     description=(
-        "Compute an indicative insurance premium for the given universe and subscriber profile. "
-        "Returns monthly and annual premium, risk loading, and available product codes. "
-        "Stub returns deterministic indicative rates — not contractually binding."
+        "[Domaine: Emprunteur — système jRensure] "
+        "Calcule la prime indicative d'assurance emprunteur pour un profil donné. "
+        "Retourne le taux annuel en %, la cotisation mensuelle et les formules disponibles. "
+        "Pour une comparaison multi-offres jRensure, utiliser rikees_compare_offres. "
+        "Tarifs indicatifs non contractuels — à utiliser pour l'orientation et le conseil."
     ),
 )
-async def compute_tarif(params: ComputeTarifInput) -> str:
-    base_rates = {
-        Universe.EMPRUNTEUR: 0.0015,
-        Universe.SANTE: 80.0,
-        Universe.SANTE_COLLECTIVE: 55.0,
-        Universe.PREVOYANCE: 60.0,
-        Universe.GAV: 12.0,
-        Universe.DOMMAGES: 45.0,
-        Universe.OBSEQUES: 25.0,
-        Universe.SANTE_INTERNATIONALE: 90.0,
-    }
-    age_factor = 1.0 + max(0, (params.borrower_age - 35) * 0.015)
-    risk_factors = {RiskLevel.STANDARD: 1.0, RiskLevel.AGGREVE: 1.35, RiskLevel.TRES_AGGREVE: 1.75}
-    risk_factor = risk_factors.get(params.risk_level, 1.0)
-    beneficiary_factor = 1.0 + (params.beneficiary_count - 1) * 0.65
+async def compute_tarif_emprunteur(params: TarifEmprunteurInput) -> str:
+    base = 0.0015
+    af = _age_factor(params.borrower_age)
+    rf = _risk_factor(params.risk_level)
+    monthly = round(params.loan_amount * base * af * rf / 12, 2)
+    annual_rate_pct = round(base * af * rf * 100, 4)
+    return (
+        f"universe: emprunteur\n"
+        f"annual_rate_pct: {annual_rate_pct}\n"
+        f"monthly_premium_eur: {monthly}\n"
+        f"risk_loading_pct: {round((rf - 1) * 100, 1)}\n"
+        f"available_formulas: DC_PTIA | DC_PTIA_IPT | DC_PTIA_IPT_IPP"
+    )
 
-    base = base_rates.get(params.universe, 50.0)
 
-    if params.universe == Universe.EMPRUNTEUR and params.loan_amount and params.loan_duration_years:
-        monthly = round(params.loan_amount * base * age_factor * risk_factor / 12, 2)
-        annual_rate_pct = round(base * age_factor * risk_factor * 100, 4)
-        return (
-            f"universe: {params.universe}\n"
-            f"annual_rate_pct: {annual_rate_pct}\n"
-            f"monthly_premium_eur: {monthly}\n"
-            f"risk_loading_pct: {round((risk_factor - 1) * 100, 1)}\n"
-            f"available_formulas: DC_PTIA | DC_PTIA_IPT | DC_PTIA_IPT_IPP"
-        )
-    else:
-        monthly = round(base * age_factor * risk_factor * beneficiary_factor, 2)
-        return (
-            f"universe: {params.universe}\n"
-            f"monthly_premium_eur: {monthly}\n"
-            f"annual_premium_eur: {round(monthly * 12, 2)}\n"
-            f"risk_loading_pct: {round((risk_factor - 1) * 100, 1)}\n"
-            f"beneficiaries_covered: {params.beneficiary_count}"
-        )
+# ---------------------------------------------------------------------------
+# TARIFICATION — Santé individuelle  (système Néoliane / Santiane)
+# ---------------------------------------------------------------------------
+
+class TarifSanteInput(BaseModel):
+    subscriber_age: int = Field(description="Subscriber age", ge=18, le=85)
+    beneficiary_count: int = Field(1, description="Number of beneficiaries covered", ge=1, le=10)
+    risk_level: RiskLevel = Field(RiskLevel.STANDARD, description="Health risk level")
+
+    model_config = {"use_enum_values": True}
+
+
+@mcp.tool(
+    name="rikees_compute_tarif_sante",
+    description=(
+        "[Domaine: Santé individuelle — système Néoliane / Santiane] "
+        "Calcule la prime mensuelle indicative de complémentaire santé individuelle. "
+        "Retourne la cotisation mensuelle, annuelle, le chargement risque et le nombre de bénéficiaires couverts. "
+        "Tarifs indicatifs non contractuels — à utiliser pour l'orientation et le conseil."
+    ),
+)
+async def compute_tarif_sante(params: TarifSanteInput) -> str:
+    base = 80.0
+    af = _age_factor(params.subscriber_age)
+    rf = _risk_factor(params.risk_level)
+    bf = 1.0 + (params.beneficiary_count - 1) * 0.65
+    monthly = round(base * af * rf * bf, 2)
+    return (
+        f"universe: sante\n"
+        f"monthly_premium_eur: {monthly}\n"
+        f"annual_premium_eur: {round(monthly * 12, 2)}\n"
+        f"risk_loading_pct: {round((rf - 1) * 100, 1)}\n"
+        f"beneficiaries_covered: {params.beneficiary_count}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# TARIFICATION — Santé collective  (système GestiAssur Collectif)
+# ---------------------------------------------------------------------------
+
+class TarifSanteCollectiveInput(BaseModel):
+    subscriber_age: int = Field(description="Average employee age (used for base rate)", ge=18, le=70)
+    beneficiary_count: int = Field(1, description="Number of employees covered", ge=1, le=500)
+    risk_level: RiskLevel = Field(RiskLevel.STANDARD, description="Risk level for the group")
+
+    model_config = {"use_enum_values": True}
+
+
+@mcp.tool(
+    name="rikees_compute_tarif_sante_collective",
+    description=(
+        "[Domaine: Santé collective — système GestiAssur Collectif] "
+        "Calcule la prime mensuelle indicative de complémentaire santé collective pour un groupe d'employés. "
+        "Retourne la cotisation mensuelle totale, annuelle, et le chargement risque. "
+        "Tarifs indicatifs non contractuels — à finaliser lors du devis formel pour l'entreprise."
+    ),
+)
+async def compute_tarif_sante_collective(params: TarifSanteCollectiveInput) -> str:
+    base = 55.0
+    af = _age_factor(params.subscriber_age)
+    rf = _risk_factor(params.risk_level)
+    bf = 1.0 + (params.beneficiary_count - 1) * 0.65
+    monthly = round(base * af * rf * bf, 2)
+    return (
+        f"universe: sante_collective\n"
+        f"monthly_premium_eur: {monthly}\n"
+        f"annual_premium_eur: {round(monthly * 12, 2)}\n"
+        f"risk_loading_pct: {round((rf - 1) * 100, 1)}\n"
+        f"beneficiaries_covered: {params.beneficiary_count}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# TARIFICATION — Prévoyance individuelle  (système Prévoyance TNS)
+# ---------------------------------------------------------------------------
+
+class TarifPrevoyanceInput(BaseModel):
+    subscriber_age: int = Field(description="Subscriber age", ge=18, le=70)
+    beneficiary_count: int = Field(1, description="Number of beneficiaries", ge=1, le=10)
+    risk_level: RiskLevel = Field(RiskLevel.STANDARD, description="Medical/profession risk level")
+
+    model_config = {"use_enum_values": True}
+
+
+@mcp.tool(
+    name="rikees_compute_tarif_prevoyance",
+    description=(
+        "[Domaine: Prévoyance individuelle — système Prévoyance TNS] "
+        "Calcule la prime mensuelle indicative pour un contrat prévoyance individuelle (décès, invalidité, incapacité). "
+        "Retourne la cotisation mensuelle, annuelle et le chargement risque. "
+        "Tarifs indicatifs non contractuels — à utiliser pour l'orientation et le conseil."
+    ),
+)
+async def compute_tarif_prevoyance(params: TarifPrevoyanceInput) -> str:
+    base = 60.0
+    af = _age_factor(params.subscriber_age)
+    rf = _risk_factor(params.risk_level)
+    bf = 1.0 + (params.beneficiary_count - 1) * 0.65
+    monthly = round(base * af * rf * bf, 2)
+    return (
+        f"universe: prevoyance\n"
+        f"monthly_premium_eur: {monthly}\n"
+        f"annual_premium_eur: {round(monthly * 12, 2)}\n"
+        f"risk_loading_pct: {round((rf - 1) * 100, 1)}\n"
+        f"beneficiaries_covered: {params.beneficiary_count}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# TARIFICATION — GAV  (système AccidentVie)
+# ---------------------------------------------------------------------------
+
+class TarifGavInput(BaseModel):
+    subscriber_age: int = Field(description="Subscriber age", ge=18, le=75)
+    risk_level: RiskLevel = Field(RiskLevel.STANDARD, description="Profession/activity risk level")
+
+    model_config = {"use_enum_values": True}
+
+
+@mcp.tool(
+    name="rikees_compute_tarif_gav",
+    description=(
+        "[Domaine: GAV (Garantie des Accidents de la Vie) — système AccidentVie] "
+        "Calcule la prime mensuelle indicative pour un contrat GAV. "
+        "Retourne la cotisation mensuelle, annuelle et le chargement risque lié au niveau de risque professionnel/activité. "
+        "Tarifs indicatifs non contractuels — à utiliser pour l'orientation et le conseil."
+    ),
+)
+async def compute_tarif_gav(params: TarifGavInput) -> str:
+    base = 12.0
+    af = _age_factor(params.subscriber_age)
+    rf = _risk_factor(params.risk_level)
+    monthly = round(base * af * rf, 2)
+    return (
+        f"universe: gav\n"
+        f"monthly_premium_eur: {monthly}\n"
+        f"annual_premium_eur: {round(monthly * 12, 2)}\n"
+        f"risk_loading_pct: {round((rf - 1) * 100, 1)}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# TARIFICATION — Dommages  (système IARD Pro)
+# ---------------------------------------------------------------------------
+
+class TarifDommagesInput(BaseModel):
+    subscriber_age: int = Field(description="Subscriber/policyholder age", ge=18, le=85)
+    risk_level: RiskLevel = Field(RiskLevel.STANDARD, description="Risk level")
+
+    model_config = {"use_enum_values": True}
+
+
+@mcp.tool(
+    name="rikees_compute_tarif_dommages",
+    description=(
+        "[Domaine: Dommages — système IARD Pro] "
+        "Calcule la prime mensuelle indicative pour un contrat dommages. "
+        "Retourne la cotisation mensuelle, annuelle et le chargement risque. "
+        "Tarifs indicatifs non contractuels — à utiliser pour l'orientation et le conseil."
+    ),
+)
+async def compute_tarif_dommages(params: TarifDommagesInput) -> str:
+    base = 45.0
+    af = _age_factor(params.subscriber_age)
+    rf = _risk_factor(params.risk_level)
+    monthly = round(base * af * rf, 2)
+    return (
+        f"universe: dommages\n"
+        f"monthly_premium_eur: {monthly}\n"
+        f"annual_premium_eur: {round(monthly * 12, 2)}\n"
+        f"risk_loading_pct: {round((rf - 1) * 100, 1)}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# TARIFICATION — Obsèques  (système ObsèquesFrance)
+# ---------------------------------------------------------------------------
+
+class TarifObsequesInput(BaseModel):
+    subscriber_age: int = Field(description="Subscriber age", ge=18, le=85)
+    risk_level: RiskLevel = Field(RiskLevel.STANDARD, description="Health risk level")
+
+    model_config = {"use_enum_values": True}
+
+
+@mcp.tool(
+    name="rikees_compute_tarif_obseques",
+    description=(
+        "[Domaine: Obsèques — système ObsèquesFrance] "
+        "Calcule la prime mensuelle indicative pour un contrat obsèques individuel. "
+        "Retourne la cotisation mensuelle, annuelle et le chargement risque. "
+        "Tarifs indicatifs non contractuels — à utiliser pour l'orientation et le conseil."
+    ),
+)
+async def compute_tarif_obseques(params: TarifObsequesInput) -> str:
+    base = 25.0
+    af = _age_factor(params.subscriber_age)
+    rf = _risk_factor(params.risk_level)
+    monthly = round(base * af * rf, 2)
+    return (
+        f"universe: obseques\n"
+        f"monthly_premium_eur: {monthly}\n"
+        f"annual_premium_eur: {round(monthly * 12, 2)}\n"
+        f"risk_loading_pct: {round((rf - 1) * 100, 1)}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# TARIFICATION — Santé internationale  (système GlobalCare)
+# ---------------------------------------------------------------------------
+
+class TarifSanteIntlInput(BaseModel):
+    subscriber_age: int = Field(description="Subscriber age", ge=18, le=75)
+    beneficiary_count: int = Field(1, description="Number of beneficiaries covered", ge=1, le=10)
+    risk_level: RiskLevel = Field(RiskLevel.STANDARD, description="Health risk level")
+
+    model_config = {"use_enum_values": True}
+
+
+@mcp.tool(
+    name="rikees_compute_tarif_sante_internationale",
+    description=(
+        "[Domaine: Santé internationale — système GlobalCare] "
+        "Calcule la prime mensuelle indicative pour une complémentaire santé internationale (expatriés, détachés). "
+        "Retourne la cotisation mensuelle, annuelle, le chargement risque et le nombre de bénéficiaires couverts. "
+        "Tarifs indicatifs non contractuels — à utiliser pour l'orientation et le conseil."
+    ),
+)
+async def compute_tarif_sante_internationale(params: TarifSanteIntlInput) -> str:
+    base = 90.0
+    af = _age_factor(params.subscriber_age)
+    rf = _risk_factor(params.risk_level)
+    bf = 1.0 + (params.beneficiary_count - 1) * 0.65
+    monthly = round(base * af * rf * bf, 2)
+    return (
+        f"universe: sante_internationale\n"
+        f"monthly_premium_eur: {monthly}\n"
+        f"annual_premium_eur: {round(monthly * 12, 2)}\n"
+        f"risk_loading_pct: {round((rf - 1) * 100, 1)}\n"
+        f"beneficiaries_covered: {params.beneficiary_count}"
+    )
 
 
 class CompareOffresInput(BaseModel):
-    universe: Universe = Field(description="Product universe for comparison")
-    borrower_age: int = Field(description="Borrower/subscriber age", ge=18, le=90)
-    loan_amount: Optional[int] = Field(None, description="Loan amount in euros (emprunteur)")
-    loan_duration_years: Optional[int] = Field(None, description="Loan duration in years (emprunteur)")
-    loan_type: Optional[LoanType] = Field(None, description="Loan type (emprunteur)")
+    borrower_age: int = Field(description="Borrower age", ge=18, le=90)
+    loan_amount: Optional[int] = Field(None, description="Loan amount in euros")
+    loan_duration_years: Optional[int] = Field(None, description="Loan duration in years")
+    loan_type: Optional[LoanType] = Field(None, description="Loan type")
     risk_level: RiskLevel = Field(RiskLevel.STANDARD, description="Risk level")
     lemoine_eligible: Optional[bool] = Field(None, description="Restrict to Lemoine-compatible offers if True")
 
@@ -194,22 +448,17 @@ _EMPRUNTEUR_OFFERS = [
 @mcp.tool(
     name="rikees_compare_offres",
     description=(
-        "Launch a multi-offer comparison on jRensure for the given universe and profile. "
-        "Returns ranked list of available offers with indicative monthly premiums. "
-        "For emprunteur, can filter by Lemoine eligibility."
+        "[Domaine: Emprunteur — comparateur multi-offres jRensure] "
+        "Lance une comparaison multi-offres via jRensure pour l'univers emprunteur. "
+        "Retourne le tableau comparatif des offres disponibles classées par cotisation mensuelle. "
+        "Permet de filtrer par éligibilité Lemoine, niveau de risque médical/professionnel. "
+        "Pour un tarif indicatif emprunteur sur une seule offre, utiliser rikees_compute_tarif_emprunteur. "
+        "Pour les autres univers, utiliser le tool rikees_compute_tarif_<univers> correspondant."
     ),
 )
 async def compare_offres(params: CompareOffresInput) -> str:
-    if params.universe != Universe.EMPRUNTEUR:
-        return (
-            f"universe: {params.universe}\n"
-            f"message: Multi-offer comparison available only for emprunteur universe via jRensure. "
-            f"For {params.universe}, use rikees_compute_tarif to get indicative pricing."
-        )
-
-    age_factor = 1.0 + max(0, (params.borrower_age - 35) * 0.015)
-    risk_factors = {RiskLevel.STANDARD: 1.0, RiskLevel.AGGREVE: 1.35, RiskLevel.TRES_AGGREVE: 1.75}
-    rf = risk_factors.get(params.risk_level, 1.0)
+    af = _age_factor(params.borrower_age)
+    rf = _risk_factor(params.risk_level)
     base_amount = params.loan_amount or 200_000
 
     offers = []
@@ -218,67 +467,125 @@ async def compare_offres(params: CompareOffresInput) -> str:
             continue
         if params.risk_level in (RiskLevel.AGGREVE, RiskLevel.TRES_AGGREVE) and o["lemoine"]:
             continue
-        monthly = round(base_amount * 0.0015 * age_factor * rf / 12 * (0.9 if o["lemoine"] else 1.0), 2)
+        monthly = round(base_amount * 0.0015 * af * rf / 12 * (0.9 if o["lemoine"] else 1.0), 2)
         offers.append(f"  - {o['name']} ({o['code']}): {monthly} €/mois | formule {o['formula']} | lemoine: {o['lemoine']}")
 
     lines = [f"universe: emprunteur", f"borrower_age: {params.borrower_age}", f"offers ({len(offers)}):"] + offers
     return "\n".join(lines)
 
 
-class PiecesJustificativesInput(BaseModel):
-    universe: Universe = Field(description="Product universe")
+# ---------------------------------------------------------------------------
+# PIÈCES JUSTIFICATIVES — par univers / système documentaire
+# ---------------------------------------------------------------------------
+
+class PiecesEmprunteurInput(BaseModel):
     product_code: Optional[str] = Field(None, description="Specific product code (e.g. 'eclipse_pro')")
     lemoine_eligible: bool = Field(False, description="Whether Lemoine applies (removes medical questionnaire)")
 
-    model_config = {"use_enum_values": True}
 
-
-_PIECES: dict[str, list[str]] = {
-    "emprunteur": [
+@mcp.tool(
+    name="rikees_get_pieces_justificatives_emprunteur",
+    description=(
+        "[Domaine: DDA / Documentation — Emprunteur] "
+        "Retourne la liste des pièces justificatives requises pour un dossier assurance emprunteur. "
+        "Si lemoine_eligible=True, le questionnaire médical est supprimé des exigences. "
+        "À utiliser avant la soumission d'un dossier emprunteur pour anticiper les documents à collecter."
+    ),
+)
+async def get_pieces_justificatives_emprunteur(params: PiecesEmprunteurInput) -> str:
+    pieces = [
         "Pièce d'identité en cours de validité (CNI recto-verso ou passeport)",
         "Justificatif de domicile < 3 mois",
         "Tableau d'amortissement signé par la banque prêteuse",
         "Bulletins de salaire des 3 derniers mois (salarié) OU 2 derniers avis d'imposition (TNS)",
         "[si hors-Lemoine] Questionnaire de santé complet",
         "[si capital > 300 000 €] Rapport médical et examens complémentaires",
-    ],
-    "sante": [
+    ]
+    if params.lemoine_eligible:
+        pieces = [p for p in pieces if "questionnaire" not in p.lower() and "médical" not in p.lower()]
+        pieces.append("✓ Lemoine applicable — questionnaire médical supprimé")
+    lines = ["universe: emprunteur", f"product_code: {params.product_code or 'all'}", "pieces_requises:"]
+    lines += [f"  - {p}" for p in pieces]
+    return "\n".join(lines)
+
+
+class PiecesProductCodeInput(BaseModel):
+    product_code: Optional[str] = Field(None, description="Specific product code")
+
+
+@mcp.tool(
+    name="rikees_get_pieces_justificatives_sante",
+    description=(
+        "[Domaine: DDA / Documentation — Santé individuelle] "
+        "Retourne la liste des pièces justificatives requises pour un dossier complémentaire santé individuelle. "
+        "À utiliser avant la soumission d'un dossier santé pour anticiper les documents à collecter."
+    ),
+)
+async def get_pieces_justificatives_sante(params: PiecesProductCodeInput) -> str:
+    pieces = [
         "Pièce d'identité",
         "Attestation de sécurité sociale",
         "RIB pour prélèvement",
-    ],
-    "prevoyance": [
+    ]
+    lines = ["universe: sante", f"product_code: {params.product_code or 'all'}", "pieces_requises:"]
+    lines += [f"  - {p}" for p in pieces]
+    return "\n".join(lines)
+
+
+@mcp.tool(
+    name="rikees_get_pieces_justificatives_prevoyance",
+    description=(
+        "[Domaine: DDA / Documentation — Prévoyance individuelle] "
+        "Retourne la liste des pièces justificatives requises pour un dossier prévoyance individuelle (TNS/Madelin). "
+        "À utiliser avant la soumission d'un dossier prévoyance pour anticiper les documents à collecter."
+    ),
+)
+async def get_pieces_justificatives_prevoyance(params: PiecesProductCodeInput) -> str:
+    pieces = [
         "Pièce d'identité",
         "Justificatif de revenus TNS (avis d'imposition N-1 ou attestation URSSAF)",
         "Extrait Kbis ou attestation d'activité professionnelle",
         "Questionnaire de santé (si garanties IPT/PTIA incluses)",
-    ],
-    "sante_collective": [
+    ]
+    lines = ["universe: prevoyance", f"product_code: {params.product_code or 'all'}", "pieces_requises:"]
+    lines += [f"  - {p}" for p in pieces]
+    return "\n".join(lines)
+
+
+@mcp.tool(
+    name="rikees_get_pieces_justificatives_sante_collective",
+    description=(
+        "[Domaine: DDA / Documentation — Santé collective] "
+        "Retourne la liste des pièces justificatives requises pour un dossier santé collective entreprise. "
+        "À utiliser avant la soumission d'un dossier santé collective pour anticiper les documents à collecter."
+    ),
+)
+async def get_pieces_justificatives_sante_collective(params: PiecesProductCodeInput) -> str:
+    pieces = [
         "Accord collectif ou Décision Unilatérale de l'Employeur (DUE)",
         "Liste nominative du personnel (modèle Excel fourni par l'assureur)",
         "SIRET de l'entreprise",
         "Attestations de non-couverture pour les salariés dispensés d'adhésion",
-    ],
-    "gav": [
-        "Pièce d'identité",
-        "RIB",
-    ],
-}
+    ]
+    lines = ["universe: sante_collective", f"product_code: {params.product_code or 'all'}", "pieces_requises:"]
+    lines += [f"  - {p}" for p in pieces]
+    return "\n".join(lines)
 
 
 @mcp.tool(
-    name="rikees_get_pieces_justificatives",
+    name="rikees_get_pieces_justificatives_gav",
     description=(
-        "Return the list of required supporting documents for a given product universe and optional product code. "
-        "If lemoine_eligible is True, the medical questionnaire is removed from emprunteur requirements."
+        "[Domaine: DDA / Documentation — GAV] "
+        "Retourne la liste des pièces justificatives requises pour un dossier GAV (Garantie des Accidents de la Vie). "
+        "À utiliser avant la soumission d'un dossier GAV pour anticiper les documents à collecter."
     ),
 )
-async def get_pieces_justificatives(params: PiecesJustificativesInput) -> str:
-    pieces = list(_PIECES.get(params.universe, ["Pièce d'identité", "RIB"]))
-    if params.lemoine_eligible and params.universe == Universe.EMPRUNTEUR:
-        pieces = [p for p in pieces if "questionnaire" not in p.lower() and "médical" not in p.lower()]
-        pieces.append("✓ Lemoine applicable — questionnaire médical supprimé")
-    lines = [f"universe: {params.universe}", f"product_code: {params.product_code or 'all'}", "pieces_requises:"]
+async def get_pieces_justificatives_gav(params: PiecesProductCodeInput) -> str:
+    pieces = [
+        "Pièce d'identité",
+        "RIB",
+    ]
+    lines = ["universe: gav", f"product_code: {params.product_code or 'all'}", "pieces_requises:"]
     lines += [f"  - {p}" for p in pieces]
     return "\n".join(lines)
 
@@ -294,9 +601,12 @@ class ExportDevisInput(BaseModel):
 @mcp.tool(
     name="rikees_export_devis",
     description=(
-        "Generate and return download URLs for DDA-compliant quote documents. "
-        "Produces: devis (quote PDF), IPID, fiche_conseil (advice note), and optionally conditions générales. "
-        "Documents expire after 30 days."
+        "[Domaine: DDA / Documentation — tous univers] "
+        "Génère et retourne les URLs de téléchargement des documents de devis conformes DDA. "
+        "Produit : devis (PDF), IPID (document d'information standardisé), fiche_conseil (note de conseil), "
+        "et optionnellement les conditions générales. "
+        "Obligations DDA : l'IPID et la fiche conseil doivent être remis au client avec accusé de réception. "
+        "Les documents expirent après 30 jours."
     ),
 )
 async def export_devis(params: ExportDevisInput) -> str:
@@ -316,22 +626,23 @@ async def export_devis(params: ExportDevisInput) -> str:
     return "\n".join(lines)
 
 
-class ApiTarificationSchemaInput(BaseModel):
-    universe: Universe = Field(Universe.EMPRUNTEUR, description="Universe to get API schema for")
-
-    model_config = {"use_enum_values": True}
+# ---------------------------------------------------------------------------
+# SCHÉMAS API DE TARIFICATION — par univers / système
+# ---------------------------------------------------------------------------
 
 
 @mcp.tool(
-    name="rikees_get_api_tarification_schema",
+    name="rikees_get_api_tarification_schema_emprunteur",
     description=(
-        "Return the API schema for the tarification endpoint of the given universe, "
-        "including input parameters, types, constraints, error codes, and rate limits."
+        "[Domaine: API / Technique — Emprunteur / système jRensure] "
+        "Retourne le schéma complet de l'API de tarification emprunteur : "
+        "endpoint, paramètres d'entrée, types, contraintes, codes d'erreur, rate limits et SLA. "
+        "À utiliser pour les intégrations techniques jRensure, le débogage d'erreurs API, "
+        "ou pour comprendre les limites de la génération automatisée de devis emprunteur."
     ),
 )
-async def get_api_tarification_schema(params: ApiTarificationSchemaInput) -> str:
-    if params.universe == Universe.EMPRUNTEUR:
-        return """\
+async def get_api_tarification_schema_emprunteur() -> str:
+    return """\
 endpoint: POST /v1/tarification/emprunteur
 authentication: Bearer token (header: Authorization)
 rate_limit: 60 requests/minute, 500 requests/day (standard plan)
@@ -369,10 +680,131 @@ manual_review_required_if:
   - profession_risk_level: très_aggravé
   - loan_amount > 500000
 """
+
+
+@mcp.tool(
+    name="rikees_get_api_tarification_schema_sante",
+    description=(
+        "[Domaine: API / Technique — Santé individuelle / système Néoliane] "
+        "Retourne le schéma de l'API de tarification santé individuelle : endpoint, paramètres, contraintes et SLA. "
+        "À utiliser pour les intégrations techniques avec le système de tarification santé individuelle."
+    ),
+)
+async def get_api_tarification_schema_sante() -> str:
     return (
-        f"endpoint: POST /v1/tarification/{params.universe}\n"
-        f"note: Full schema available in the developer documentation portal. "
-        f"Core parameters: universe, subscriber_age, beneficiary_count, coverage_level."
+        "endpoint: POST /v1/tarification/sante\n"
+        "authentication: Bearer token (header: Authorization)\n"
+        "rate_limit: 60 requests/minute\n"
+        "core_parameters: subscriber_age, beneficiary_count, coverage_level\n"
+        "note: Full schema available in the developer documentation portal."
+    )
+
+
+@mcp.tool(
+    name="rikees_get_api_tarification_schema_prevoyance",
+    description=(
+        "[Domaine: API / Technique — Prévoyance individuelle / système Prévoyance TNS] "
+        "Retourne le schéma de l'API de tarification prévoyance individuelle : endpoint, paramètres, contraintes et SLA. "
+        "À utiliser pour les intégrations techniques avec le système de tarification prévoyance."
+    ),
+)
+async def get_api_tarification_schema_prevoyance() -> str:
+    return (
+        "endpoint: POST /v1/tarification/prevoyance\n"
+        "authentication: Bearer token (header: Authorization)\n"
+        "rate_limit: 60 requests/minute\n"
+        "core_parameters: subscriber_age, beneficiary_count, coverage_level\n"
+        "note: Full schema available in the developer documentation portal."
+    )
+
+
+@mcp.tool(
+    name="rikees_get_api_tarification_schema_sante_collective",
+    description=(
+        "[Domaine: API / Technique — Santé collective / système GestiAssur Collectif] "
+        "Retourne le schéma de l'API de tarification santé collective : endpoint, paramètres, contraintes et SLA. "
+        "À utiliser pour les intégrations techniques avec le système de tarification santé collective."
+    ),
+)
+async def get_api_tarification_schema_sante_collective() -> str:
+    return (
+        "endpoint: POST /v1/tarification/sante_collective\n"
+        "authentication: Bearer token (header: Authorization)\n"
+        "rate_limit: 60 requests/minute\n"
+        "core_parameters: subscriber_age, beneficiary_count, coverage_level, ccn_code\n"
+        "note: Full schema available in the developer documentation portal."
+    )
+
+
+@mcp.tool(
+    name="rikees_get_api_tarification_schema_gav",
+    description=(
+        "[Domaine: API / Technique — GAV / système AccidentVie] "
+        "Retourne le schéma de l'API de tarification GAV : endpoint, paramètres, contraintes et SLA. "
+        "À utiliser pour les intégrations techniques avec le système de tarification GAV."
+    ),
+)
+async def get_api_tarification_schema_gav() -> str:
+    return (
+        "endpoint: POST /v1/tarification/gav\n"
+        "authentication: Bearer token (header: Authorization)\n"
+        "rate_limit: 60 requests/minute\n"
+        "core_parameters: subscriber_age, risk_level\n"
+        "note: Full schema available in the developer documentation portal."
+    )
+
+
+@mcp.tool(
+    name="rikees_get_api_tarification_schema_dommages",
+    description=(
+        "[Domaine: API / Technique — Dommages / système IARD Pro] "
+        "Retourne le schéma de l'API de tarification dommages : endpoint, paramètres, contraintes et SLA. "
+        "À utiliser pour les intégrations techniques avec le système de tarification dommages."
+    ),
+)
+async def get_api_tarification_schema_dommages() -> str:
+    return (
+        "endpoint: POST /v1/tarification/dommages\n"
+        "authentication: Bearer token (header: Authorization)\n"
+        "rate_limit: 60 requests/minute\n"
+        "core_parameters: subscriber_age, risk_level, property_type\n"
+        "note: Full schema available in the developer documentation portal."
+    )
+
+
+@mcp.tool(
+    name="rikees_get_api_tarification_schema_obseques",
+    description=(
+        "[Domaine: API / Technique — Obsèques / système ObsèquesFrance] "
+        "Retourne le schéma de l'API de tarification obsèques : endpoint, paramètres, contraintes et SLA. "
+        "À utiliser pour les intégrations techniques avec le système de tarification obsèques."
+    ),
+)
+async def get_api_tarification_schema_obseques() -> str:
+    return (
+        "endpoint: POST /v1/tarification/obseques\n"
+        "authentication: Bearer token (header: Authorization)\n"
+        "rate_limit: 60 requests/minute\n"
+        "core_parameters: subscriber_age, capital_obseques_eur\n"
+        "note: Full schema available in the developer documentation portal."
+    )
+
+
+@mcp.tool(
+    name="rikees_get_api_tarification_schema_sante_internationale",
+    description=(
+        "[Domaine: API / Technique — Santé internationale / système GlobalCare] "
+        "Retourne le schéma de l'API de tarification santé internationale : endpoint, paramètres, contraintes et SLA. "
+        "À utiliser pour les intégrations techniques avec le système GlobalCare pour expatriés et détachés."
+    ),
+)
+async def get_api_tarification_schema_sante_internationale() -> str:
+    return (
+        "endpoint: POST /v1/tarification/sante_internationale\n"
+        "authentication: Bearer token (header: Authorization)\n"
+        "rate_limit: 60 requests/minute\n"
+        "core_parameters: subscriber_age, beneficiary_count, destination_zone, coverage_level\n"
+        "note: Full schema available in the developer documentation portal."
     )
 
 
@@ -385,8 +817,10 @@ class MadelinPlafondInput(BaseModel):
 @mcp.tool(
     name="rikees_get_madelin_plafonds",
     description=(
-        "Calculate Madelin deductibility limits for a TNS/independent professional. "
-        "Returns applicable ceiling and calculation breakdown for the given income and contract type."
+        "[Domaine: TNS / Prévoyance individuelle — artisans, commerçants, professions libérales] "
+        "Calcule les plafonds de déductibilité Madelin pour un travailleur non-salarié (TNS) / professionnel indépendant. "
+        "Retourne le plafond applicable et le détail du calcul pour prévoyance, retraite ou santé complémentaire Madelin. "
+        "Utiliser systématiquement avant de proposer un contrat prévoyance ou retraite Madelin à un TNS."
     ),
 )
 async def get_madelin_plafonds(params: MadelinPlafondInput) -> str:
@@ -462,9 +896,12 @@ _CCN_MINIMA: dict[str, dict] = {
 @mcp.tool(
     name="rikees_check_ccn_compliance",
     description=(
-        "Verify that a set of collective guarantee levels meets the minimum requirements of a given CCN "
-        "(Convention Collective Nationale) and/or the ANI framework. "
-        "Returns a compliance status (green/orange/red) per criterion and overall verdict."
+        "[Domaine: Santé / Prévoyance collective — entreprises et CCN] "
+        "Vérifie la conformité d'un ensemble de garanties collectives avec les exigences minimales "
+        "d'une CCN (Convention Collective Nationale) et/ou du cadre ANI. "
+        "CCN supportées : metallurgie, btp, hcr, ani (toutes branches). "
+        "Retourne un statut vert/orange/rouge par critère et un verdict global. "
+        "À utiliser pour tout devis santé ou prévoyance collective avant remise à une entreprise cliente."
     ),
 )
 async def check_ccn_compliance(params: CcnComplianceInput) -> str:
@@ -499,8 +936,13 @@ async def check_ccn_compliance(params: CcnComplianceInput) -> str:
 
 
 # ---------------------------------------------------------------------------
-# ── PORTEFEUILLE / SUIVI TOOLS ───────────────────────────────────────────────
-# ---------------------------------------------------------------------------
+# ── PORTEFEUILLE / SUIVI TOOLS ───────────────────────────────────────────────#
+# Domains covered:
+#   [Suivi Dossiers]    get_dossier_status  — statut en temps réel d'un dossier soumis
+#   [Portefeuille]      get_portefeuille, get_echeances_alertes  — vue contrats actifs
+#   [Production]        get_tableau_de_bord  — KPIs et tableau de bord courtier
+#   [Gestion Contrats]  get_documents_contractuels, modifier_contrat  — documents et avenants
+#   [API/Tech]          get_api_statut_schema  — schéma endpoint statut (usage technique)# ---------------------------------------------------------------------------
 
 
 class GetDossierStatusInput(BaseModel):
@@ -551,14 +993,40 @@ _STUB_DOSSIERS: dict[str, dict] = {
         "pending_actions": [],
         "policy_number": "EP-2026-0089234",
     },
+    # Referenced in MAT-SUV-03 dashboard (tableau de bord)
+    "KM-0421": {
+        "status": "pending_documents",
+        "client": "Karim M.",
+        "universe": "emprunteur",
+        "submitted_at": "2026-04-22T09:00:00Z",
+        "last_updated_at": "2026-04-22T09:00:00Z",
+        "pending_actions": [
+            {"type": "document", "description": "Bulletin de salaire manquant", "deadline": "2026-04-30"},
+        ],
+        "policy_number": None,
+    },
+    # Referenced in NAT-SUV-03 multi-turn (santé collective PME BTP)
+    "SC-BTP-2025-0040": {
+        "status": "under_review",
+        "client": "PME Dubois BTP (40 sal.)",
+        "universe": "sante_collective",
+        "submitted_at": "2026-04-10T08:00:00Z",
+        "last_updated_at": "2026-04-25T14:00:00Z",
+        "pending_actions": [],
+        "policy_number": None,
+    },
 }
 
 
 @mcp.tool(
     name="rikees_get_dossier_status",
     description=(
-        "Return the current status of a submitted dossier: status code, French label, "
-        "last update timestamp, pending actions with deadlines, and policy number if accepted."
+        "[Domaine: Suivi Dossiers — tous univers] "
+        "Retourne le statut actuel d'un dossier soumis : code statut, libellé français, "
+        "horodatage de dernière mise à jour, actions en attente avec leurs deadlines, "
+        "et numéro de police si le dossier est accepté. "
+        "Utiliser avec la référence du dossier (ex: JD-2026-0425) pour connaître l'état d'avancement. "
+        "Statuts possibles : submitted, pending_documents, under_review, accepted, refused, cancelled."
     ),
 )
 async def get_dossier_status(params: GetDossierStatusInput) -> str:
@@ -618,14 +1086,21 @@ _STUB_CONTRACTS = [
      "monthly_premium": 18.0, "next_expiry": "2026-05-15", "capital": None},
     {"id": "SAN-2025-0445", "client": "Martin F.", "universe": "sante", "status": "active",
      "monthly_premium": 95.0, "next_expiry": "2026-05-01", "capital": None},
+    # Referenced in NAT-SUV-03 multi-turn (renouvellement annuel collectif CCN BTP)
+    {"id": "SC-BTP-2025-0040", "client": "PME Dubois BTP (40 sal.)", "universe": "sante_collective",
+     "status": "active", "monthly_premium": 3200.0, "next_expiry": "2026-05-31", "capital": None},
 ]
 
 
 @mcp.tool(
     name="rikees_get_portefeuille",
     description=(
-        "Return the active portfolio view with optional filters by universe, status, or upcoming expiry window. "
-        "Lists contracts with client name, universe, status, monthly premium, and next expiry date."
+        "[Domaine: Portefeuille — tous univers] "
+        "Retourne la vue portefeuille actif avec filtres optionnels par univers, statut, "
+        "ou fenêtre d'échéance (N prochains jours). "
+        "Liste les contrats avec : nom client, univers, statut, cotisation mensuelle, et date d'échéance. "
+        "Utiliser pour une vue consolidée du portefeuille ou pour planifier des campagnes de renouvellement. "
+        "Pour les alertes d'échéance précises avec recommandations d'action, utiliser rikees_get_echeances_alertes."
     ),
 )
 async def get_portefeuille(params: GetPortefeuilleInput) -> str:
@@ -662,8 +1137,11 @@ class GetEcheancesAlertesInput(BaseModel):
 @mcp.tool(
     name="rikees_get_echeances_alertes",
     description=(
-        "Return contracts expiring within the specified number of days, ordered by urgency. "
-        "Includes recommended action for each contract (renewal, Lemoine opt-out, etc.)."
+        "[Domaine: Portefeuille / Alertes échéances — tous univers] "
+        "Retourne les contrats arrivant à échéance dans la fenêtre spécifiée, triés par urgence. "
+        "Inclut une recommandation d'action pour chaque contrat (renouvellement, résiliation Lemoine, etc.). "
+        "Urgence : contrats échéant dans les 15 prochains jours sont signalés en ROUGE. "
+        "Utiliser en début de semaine ou de mois pour identifier les priorités de renouvellement."
     ),
 )
 async def get_echeances_alertes(params: GetEcheancesAlertesInput) -> str:
@@ -700,8 +1178,12 @@ class GetTableauDeBordInput(BaseModel):
 @mcp.tool(
     name="rikees_get_tableau_de_bord",
     description=(
-        "Return the production dashboard KPIs for the specified period: "
-        "quotes generated, dossiers submitted, acceptance rate, revenue, and status breakdown."
+        "[Domaine: Production / Tableau de bord — tous univers] "
+        "Retourne les KPIs de production pour la période spécifiée : "
+        "devis générés, dossiers soumis, taux de transformation, taux d'acceptation, "
+        "chiffre d'affaires, commissions créditées / en attente, et liste des dossiers bloquants prioritaires. "
+        "Périodes : mois en cours, mois précédent, trimestre, année à date. "
+        "Utiliser pour les bilans d'activité ou identifier les dossiers à débloquer en priorité."
     ),
 )
 async def get_tableau_de_bord(params: GetTableauDeBordInput) -> str:
@@ -739,9 +1221,11 @@ class GetDocumentsContractuelsInput(BaseModel):
 @mcp.tool(
     name="rikees_get_documents_contractuels",
     description=(
-        "Return downloadable contractual documents for an active contract: "
-        "conditions particulières, conditions générales, tableau des garanties, attestation. "
-        "Returns PDF download URLs valid for 7 days."
+        "[Domaine: Gestion Contrats — tous univers] "
+        "Retourne les URLs de téléchargement des documents contractuels d'un contrat actif : "
+        "conditions particulières, conditions générales, tableau des garanties, attestation d'assurance, IPID. "
+        "Les URLs sont valables 7 jours. "
+        "Utiliser pour préparer un rendez-vous client, remettre des documents, ou vérifier les garanties en vigueur."
     ),
 )
 async def get_documents_contractuels(params: GetDocumentsContractuelsInput) -> str:
@@ -782,9 +1266,13 @@ class ModifierContratInput(BaseModel):
 @mcp.tool(
     name="rikees_modifier_contrat",
     description=(
-        "Initiate a modification request on an active contract. "
-        "Supported modifications: adjunction/removal of beneficiary, guarantee level change, "
-        "quota change, cancellation. Returns a modification request ID and estimated processing time."
+        "[Domaine: Gestion Contrats — tous univers] "
+        "Initie une demande de modification sur un contrat actif. "
+        "Modifications supportées : adjonction de bénéficiaire (naissance, mariage), "
+        "suppression de bénéficiaire, changement de garanties, changement de quotité, résiliation. "
+        "Pour la résiliation emprunteur Lemoine : immédiate, préavis 0 jour. "
+        "Pour la résiliation hors-Lemoine : préavis 2 mois avant l'échéance annuelle. "
+        "Retourne un ID de demande de modification et le délai de traitement estimé."
     ),
 )
 async def modifier_contrat(params: ModifierContratInput) -> str:
@@ -820,8 +1308,11 @@ class GetApiStatutSchemaInput(BaseModel):
 @mcp.tool(
     name="rikees_get_api_statut_schema",
     description=(
-        "Return the API schema for the dossier status endpoint: HTTP method, URL, response format, "
-        "status codes, SLA, rate limits, and integration best practices (polling strategy)."
+        "[Domaine: API / Technique — usage courtiers digitaux et intégrations] "
+        "Retourne le schéma de l'endpoint de statut des dossiers : méthode HTTP, URL, format de réponse, "
+        "codes statut, SLA par étape, rate limits, et bonnes pratiques d'intégration (stratégie de polling, "
+        "endpoint de relance, procédure d'escalade). "
+        "À utiliser pour implémenter un système de suivi automatisé ou déboguer des problèmes d'intégration API."
     ),
 )
 async def get_api_statut_schema(params: GetApiStatutSchemaInput) -> str:
